@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Rfp {
+  id                 Int        @id @default(autoincrement())
+  title              String
+  descriptionRaw     String
+  budget             Int?
+  deliveryDeadline   DateTime?
+  paymentTerms       String?
+  warrantyMinMonths  Int?
+  items              Json?
+  status             String     @default("draft")
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  proposals          Proposal[]
+}
+
+model Vendor {
+  id        Int        @id @default(autoincrement())
+  name      String
+  email     String
+  category  String?
+  notes     String?
+
+  proposals Proposal[]
+}
+
+model Proposal {
+  id            Int      @id @default(autoincrement())
+  rfpId         Int
+  vendorId      Int
+  rawText       String
+  parsed        Json?
+  totalPrice    Float?
+  currency      String?
+  deliveryDays  Int?
+  warrantyYears Float?
+  paymentTerms  String?
+  score         Float?
+  aiSummary     String?
+  createdAt     DateTime @default(now())
+
+  rfp    Rfp    @relation(fields: [rfpId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+}
