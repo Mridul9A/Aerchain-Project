@@ -43,7 +43,7 @@ const VendorsPage: React.FC = () => {
   }, []);
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-5xl mx-auto py-10 space-y-6">
       <h2 className="text-xl font-semibold">Vendors</h2>
 
       {/* CREATE VENDOR FORM */}

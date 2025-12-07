@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import SendRfpPage from "./SendRfpPage";
+import React, { useEffect, useState } from "react";
 
 interface Rfp {
   id: number;
@@ -11,13 +10,13 @@ interface Rfp {
   descriptionRaw: string;
 }
 
-const RfpDetailPage = ({
-  rfpId,
-  onSend,
-}: {
+interface Props {
   rfpId: number;
-  onSend: (id: number) => void;
-}) => {
+  onSend: (rfpId: number) => void;
+  onCompare: (rfpId: number) => void;
+}
+
+const RfpDetailPage: React.FC<Props> = ({ rfpId, onSend, onCompare }) => {
   const [rfp, setRfp] = useState<Rfp | null>(null);
 
   async function loadRfp() {
@@ -30,40 +29,65 @@ const RfpDetailPage = ({
     loadRfp();
   }, [rfpId]);
 
-  if (!rfp) return <p>Loading...</p>;
+  if (!rfp) return <p className="p-4 text-sm text-gray-500">Loading RFP...</p>;
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-semibold">{rfp.title}</h2>
-
-      <div className="bg-white p-4 rounded shadow space-y-3">
-        <div><strong>Budget:</strong> {rfp.budget ?? "N/A"}</div>
-        <div><strong>Payment Terms:</strong> {rfp.paymentTerms ?? "N/A"}</div>
-        <div><strong>Warranty:</strong> {rfp.warrantyMinMonths ?? "N/A"} months</div>
+    <div className="max-w-5xl mx-auto py-10 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">{rfp.title}</h1>
+        <div className="space-x-2">
+          <button
+            onClick={() => onSend(rfp.id)}
+            className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white"
+          >
+            Send to Vendors
+          </button>
+          <button
+            onClick={() => onCompare(rfp.id)}
+            className="px-3 py-1.5 text-sm rounded border border-gray-300"
+          >
+            Compare Proposals
+          </button>
+        </div>
       </div>
 
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-semibold mb-2">Items</h3>
-        <ul className="list-disc pl-6">
-          {rfp.items.map((item, i) => (
+      <div className="grid md:grid-cols-3 gap-4">
+        <div className="bg-white rounded shadow-sm p-4">
+          <div className="text-xs text-gray-400 uppercase mb-1">Budget</div>
+          <div>{rfp.budget ?? "—"}</div>
+        </div>
+        <div className="bg-white rounded shadow-sm p-4">
+          <div className="text-xs text-gray-400 uppercase mb-1">
+            Payment Terms
+          </div>
+          <div>{rfp.paymentTerms ?? "—"}</div>
+        </div>
+        <div className="bg-white rounded shadow-sm p-4">
+          <div className="text-xs text-gray-400 uppercase mb-1">
+            Warranty (months)
+          </div>
+          <div>{rfp.warrantyMinMonths ?? "—"}</div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded shadow-sm p-4">
+        <h2 className="font-medium mb-2">Items</h2>
+        <ul className="list-disc pl-4 text-sm space-y-1">
+          {rfp.items?.map((item: any, i: number) => (
             <li key={i}>
-              <strong>{item.name}</strong> — {item.quantity}
+              <span className="font-medium">{item.name}</span> ×{" "}
+              {item.quantity}
             </li>
           ))}
         </ul>
       </div>
 
-      <div className="bg-white p-4 rounded shadow">
-        <h3 className="font-semibold mb-2">Raw Description</h3>
-        <p className="text-gray-700 whitespace-pre-wrap">{rfp.descriptionRaw}</p>
+      <div className="bg-white rounded shadow-sm p-4">
+        <h2 className="font-medium mb-2">Original Description</h2>
+        <p className="text-sm text-gray-700 whitespace-pre-wrap">
+          {rfp.descriptionRaw}
+        </p>
       </div>
-
-      <button
-        onClick={() => onSend(rfp.id)}
-        className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-      >
-        Send RFP to Vendors
-      </button>
     </div>
   );
 };
