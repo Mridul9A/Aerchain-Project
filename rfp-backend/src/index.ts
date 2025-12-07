@@ -5,34 +5,15 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import nodemailer from "nodemailer";
 import prisma from "./prisma";
 
-// Load environment variables
 dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ---- BASIC ROOT + HEALTH ----
-app.get("/", (_req: Request, res: Response) => {
-  res.send("RFP backend is running. Try GET /api/health");
-});
-
-app.get("/api/health", (_req: Request, res: Response) => {
-  res.json({ status: "ok" });
-});
-
-// ---- DB TEST ----
-app.get("/api/test-db", async (_req: Request, res: Response) => {
-  try {
-    const rfps = await prisma.rfp.findMany();
-    res.json(rfps);
-  } catch (err) {
-    console.error("DB error:", err);
-    res.status(500).json({ error: "DB_ERROR" });
-  }
-});
-
-// ---- GEMINI SETUP ----
+// -----------------------------
+// GEMINI SETUP
+// -----------------------------
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-pro";
 
@@ -40,9 +21,7 @@ if (!GEMINI_API_KEY) {
   console.error("❌ GEMINI_API_KEY is missing. Set it in .env");
 }
 
-const genAI = GEMINI_API_KEY
-  ? new GoogleGenerativeAI(GEMINI_API_KEY)
-  : null;
+const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 
 function getGeminiModel() {
   if (!genAI) {
@@ -51,23 +30,54 @@ function getGeminiModel() {
   return genAI.getGenerativeModel({ model: GEMINI_MODEL });
 }
 
-// ---- SIMPLE GEMINI TEST ----
-app.get("/api/gemini-test", async (_req: Request, res: Response) => {
-  try {
-    const model = getGeminiModel();
-    const result = await model.generateContent("Say hi in one short sentence.");
-    const text = result.response.text();
-    res.json({ text });
-  } catch (error: any) {
-    const details = error?.response?.data || error?.message || error;
-    console.error("Error in /api/gemini-test:", details);
-    res.status(500).json({ error: "GEMINI_ERROR", details });
-  }
-});
+// -----------------------------
+// SMTP / EMAIL SETUP
+// -----------------------------
+const SMTP_HOST = process.env.SMTP_HOST;
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER;
+const SMTP_PASS = process.env.SMTP_PASS;
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
 
-// ---- Helper: fallback mock when Gemini fails ----
+const mailerEnabled =
+  SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS && SMTP_FROM;
+
+const transporter = mailerEnabled
+  ? nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: false,
+      auth: {
+        user: SMTP_USER,
+        pass: SMTP_PASS,
+      },
+    })
+  : null;
+
+async function sendRfpEmail(options: {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+}) {
+  if (!transporter || !mailerEnabled) {
+    throw new Error("SMTP not configured");
+  }
+
+  await transporter.sendMail({
+    from: SMTP_FROM,
+    to: options.to,
+    subject: options.subject,
+    text: options.text,
+    html: options.html,
+  });
+}
+
+// -----------------------------
+// UTILS
+// -----------------------------
 function buildMockRfp(description: string) {
-  // You can customize this structure if you like
+  // Simple fallback RFP if Gemini fails
   return {
     title: "Procurement RFP (Mocked)",
     budget: 50000,
@@ -89,7 +99,69 @@ function buildMockRfp(description: string) {
   };
 }
 
-// ---- AI RFP GENERATION (Gemini + fallback) ----
+// Objective scoring: cheaper, faster, longer warranty = higher score
+function computeObjectiveScore(params: {
+  totalPrice: number | null;
+  deliveryDays: number | null;
+  warrantyYears: number | null;
+}) {
+  let score = 0;
+
+  if (params.totalPrice != null && params.totalPrice > 0) {
+    score += 1_000_000 / (1 + params.totalPrice); // lower price → higher
+  }
+
+  if (params.deliveryDays != null && params.deliveryDays > 0) {
+    score += 1_000 / (1 + params.deliveryDays); // faster delivery → higher
+  }
+
+  if (params.warrantyYears != null && params.warrantyYears >= 0) {
+    score += 100 * params.warrantyYears; // longer warranty → higher
+  }
+
+  return score;
+}
+
+// -----------------------------
+// BASIC ROOT + HEALTH
+// -----------------------------
+app.get("/", (_req: Request, res: Response) => {
+  res.send("RFP backend is running. Try GET /api/health");
+});
+
+app.get("/api/health", (_req: Request, res: Response) => {
+  res.json({ status: "ok" });
+});
+
+// DB TEST
+app.get("/api/test-db", async (_req: Request, res: Response) => {
+  try {
+    const rfps = await prisma.rfp.findMany();
+    res.json(rfps);
+  } catch (err) {
+    console.error("DB error:", err);
+    res.status(500).json({ error: "DB_ERROR" });
+  }
+});
+
+// SIMPLE GEMINI TEST
+app.get("/api/gemini-test", async (_req: Request, res: Response) => {
+  try {
+    const model = getGeminiModel();
+    const result = await model.generateContent("Say hi in one short sentence.");
+    const text = result.response.text();
+    res.json({ text });
+  } catch (error: any) {
+    const details = error?.response?.data || error?.message || error;
+    console.error("Error in /api/gemini-test:", details);
+    res.status(500).json({ error: "GEMINI_ERROR", details });
+  }
+});
+
+// -----------------------------
+// AI RFP GENERATION (Gemini + fallback)
+// POST /api/rfps/generate
+// -----------------------------
 app.post("/api/rfps/generate", async (req: Request, res: Response) => {
   try {
     const body = req.body as any;
@@ -110,7 +182,7 @@ app.post("/api/rfps/generate", async (req: Request, res: Response) => {
       items?: any[];
     };
 
-    // 1) Try Gemini first
+    // Try Gemini
     try {
       const model = getGeminiModel();
 
@@ -150,7 +222,6 @@ Description:
 
       parsed = JSON.parse(cleaned);
     } catch (aiError: any) {
-      // 2) If Gemini fails (404, quota, etc) → fallback to mock
       console.error(
         "Gemini failed, using mock RFP:",
         aiError?.response?.data || aiError?.message || aiError
@@ -158,7 +229,7 @@ Description:
       parsed = buildMockRfp(description);
     }
 
-    // Basic normalization
+    // Normalize + save
     const title = parsed.title ?? "Untitled RFP";
 
     const budget =
@@ -210,7 +281,9 @@ Description:
   }
 });
 
-// ---- RFP LIST & DETAIL ----
+// -----------------------------
+// RFP LIST & DETAIL
+// -----------------------------
 app.get("/api/rfps", async (_req: Request, res: Response) => {
   try {
     const rfps = await prisma.rfp.findMany({
@@ -245,7 +318,9 @@ app.get("/api/rfps/:id", async (req: Request, res: Response) => {
   }
 });
 
-// ---- VENDOR CRUD ----
+// -----------------------------
+// VENDOR CRUD
+// -----------------------------
 app.post("/api/vendors", async (req: Request, res: Response) => {
   try {
     const { name, email, category, notes } = req.body as {
@@ -311,48 +386,10 @@ app.get("/api/vendors/:id", async (req: Request, res: Response) => {
   }
 });
 
-// ---- EMAIL (SMTP) SETUP ----
-const SMTP_HOST = process.env.SMTP_HOST;
-const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASS = process.env.SMTP_PASS;
-const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
-
-const mailerEnabled =
-  SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS && SMTP_FROM;
-
-const transporter = mailerEnabled
-  ? nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: false,
-      auth: {
-        user: SMTP_USER,
-        pass: SMTP_PASS,
-      },
-    })
-  : null;
-
-async function sendRfpEmail(options: {
-  to: string;
-  subject: string;
-  text: string;
-  html?: string;
-}) {
-  if (!transporter || !mailerEnabled) {
-    throw new Error("SMTP not configured");
-  }
-
-  await transporter.sendMail({
-    from: SMTP_FROM,
-    to: options.to,
-    subject: options.subject,
-    text: options.text,
-    html: options.html,
-  });
-}
-
-// ---- SEND RFP TO VENDORS ----
+// -----------------------------
+// SEND RFP TO VENDORS
+// POST /api/rfps/:id/send
+// -----------------------------
 app.post("/api/rfps/:id/send", async (req: Request, res: Response) => {
   try {
     const rfpId = Number(req.params.id);
@@ -433,7 +470,10 @@ Thank you.
   }
 });
 
-// ---- PROPOSAL CREATION (simulate inbound vendor response) ----
+// -----------------------------
+// PROPOSAL CREATION (simulate inbound email)
+// POST /api/proposals
+// -----------------------------
 app.post("/api/proposals", async (req: Request, res: Response) => {
   try {
     const { rfpId, vendorId, rawText } = req.body as {
@@ -506,7 +546,7 @@ Proposal text:
         typeof parsed.summary === "string" ? parsed.summary : null;
     } catch (aiError: any) {
       console.error("Proposal AI parse failed, storing raw only:", aiError);
-      // leave parsed null; fields mostly null
+      // Store raw, leave most fields null
     }
 
     const proposal = await prisma.proposal.create({
@@ -520,7 +560,7 @@ Proposal text:
         deliveryDays,
         warrantyYears,
         paymentTerms,
-        score: null,
+        score: null, // filled during comparison if you want
         aiSummary,
       },
     });
@@ -535,90 +575,152 @@ Proposal text:
   }
 });
 
-// ---- COMPARE PROPOSALS FOR AN RFP ----
-app.get(
-  "/api/rfps/:id/proposals/compare",
-  async (req: Request, res: Response) => {
+// -----------------------------
+// HYBRID COMPARISON (objective + AI)
+// GET /api/rfps/:id/compare
+// -----------------------------
+app.get("/api/rfps/:id/compare", async (req: Request, res: Response) => {
+  try {
+    const rfpId = Number(req.params.id);
+    if (isNaN(rfpId)) {
+      return res.status(400).json({ error: "Invalid RFP id" });
+    }
+
+    const rfp = await prisma.rfp.findUnique({ where: { id: rfpId } });
+    if (!rfp) return res.status(404).json({ error: "RFP not found" });
+
+    const proposals = await prisma.proposal.findMany({
+      where: { rfpId },
+      include: { vendor: true },
+      orderBy: { id: "asc" },
+    });
+
+    // Compute objective score for each proposal
+    const withScores = proposals.map((p) => {
+      const objectiveScore = computeObjectiveScore({
+        totalPrice: p.totalPrice,
+        deliveryDays: p.deliveryDays,
+        warrantyYears: p.warrantyYears,
+      });
+      return { ...p, objectiveScore };
+    });
+
+    // Pick best by objective score (fallback if AI fails)
+    const bestObjective = withScores.reduce(
+      (acc: any, p: any) =>
+        acc == null || p.objectiveScore > acc.objectiveScore ? p : acc,
+      null as any
+    );
+
+    let aiRanked: any[] | null = null;
+    let aiRecommendation: string | null = null;
+    let bestVendorId: number | null = bestObjective
+      ? bestObjective.vendorId
+      : null;
+
     try {
-      const rfpId = Number(req.params.id);
-      if (isNaN(rfpId)) {
-        return res.status(400).json({ error: "Invalid RFP id" });
-      }
-
-      const rfp = await prisma.rfp.findUnique({ where: { id: rfpId } });
-      if (!rfp) return res.status(404).json({ error: "RFP not found" });
-
-      const proposals = await prisma.proposal.findMany({
-        where: { rfpId },
-        include: { vendor: true },
-        orderBy: { id: "asc" },
-      });
-
-      const scored = proposals.map((p) => {
-        let score = 0;
-        if (p.totalPrice != null) score += 1000000 / (1 + p.totalPrice);
-        if (p.deliveryDays != null) score += 1000 / (1 + p.deliveryDays);
-        if (p.warrantyYears != null) score += 100 * p.warrantyYears;
-        return { ...p, computedScore: score };
-      });
-
-      const best = scored.reduce(
-        (acc: any, p: any) =>
-          acc == null || p.computedScore > acc.computedScore ? p : acc,
-        null as any
-      );
-
-      let aiRecommendation: string | null = null;
-
-      try {
-        const model = getGeminiModel();
-        const prompt = `
-You are helping a procurement manager choose a vendor for an RFP.
+      const model = getGeminiModel();
+      const prompt = `
+You are helping a procurement manager compare vendor proposals for an RFP.
 
 RFP:
-${JSON.stringify(rfp, null, 2)}
+${JSON.stringify(
+  {
+    id: rfp.id,
+    title: rfp.title,
+    budget: rfp.budget,
+    paymentTerms: rfp.paymentTerms,
+    warrantyMinMonths: rfp.warrantyMinMonths,
+  },
+  null,
+  2
+)}
+
+Proposals (each item):
+- vendorId
+- vendorName
+- totalPrice
+- currency
+- deliveryDays
+- warrantyYears
+- paymentTerms
+- objectiveScore (higher = better)
 
 Proposals:
 ${JSON.stringify(
-  scored.map((p) => ({
+  withScores.map((p) => ({
+    vendorId: p.vendorId,
     vendorName: p.vendor.name,
     totalPrice: p.totalPrice,
     currency: p.currency,
     deliveryDays: p.deliveryDays,
     warrantyYears: p.warrantyYears,
     paymentTerms: p.paymentTerms,
+    objectiveScore: p.objectiveScore,
   })),
   null,
   2
 )}
 
-Based on price, delivery time, and warranty, recommend the best vendor.
-Return a short explanation, including trade-offs.
+TASK:
+1. Rank the vendors from best to worst.
+2. Consider price, delivery time, warranty, and objectiveScore.
+3. Return ONLY VALID JSON:
+
+{
+  "ranked": [
+    {
+      "vendorId": number,
+      "score": number,
+      "reason": string
+    }
+  ],
+  "recommendation": string
+}
 `;
 
-        const result = await model.generateContent(prompt);
-        aiRecommendation = result.response.text();
-      } catch (aiError: any) {
-        console.error("Comparison AI failed:", aiError);
+      const result = await model.generateContent(prompt);
+      const raw = result.response.text() || "{}";
+      const cleaned = raw
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+      const parsed = JSON.parse(cleaned);
+
+      aiRanked = Array.isArray(parsed.ranked) ? parsed.ranked : null;
+      aiRecommendation =
+        typeof parsed.recommendation === "string"
+          ? parsed.recommendation
+          : null;
+
+      if (aiRanked && aiRanked.length > 0) {
+        bestVendorId = aiRanked[0].vendorId ?? bestVendorId;
       }
-
-      return res.json({
-        rfp,
-        proposals: scored,
-        bestVendorId: best?.vendorId ?? null,
-        aiRecommendation,
-      });
-    } catch (err: any) {
-      console.error("Error comparing proposals:", err);
-      return res.status(500).json({
-        error: "SERVER_ERROR",
-        details: err.message || err,
-      });
+    } catch (aiError: any) {
+      console.error("Comparison AI failed, using objective only:", aiError);
+      // fall back to objective-only bestVendorId
     }
-  }
-);
 
-// ---- START SERVER ----
+    return res.json({
+      rfp,
+      proposals: withScores,
+      bestVendorId,
+      aiRanked,
+      aiRecommendation,
+    });
+  } catch (err: any) {
+    console.error("Error comparing proposals:", err);
+    return res.status(500).json({
+      error: "SERVER_ERROR",
+      details: err.message || err,
+    });
+  }
+});
+
+// -----------------------------
+// START SERVER
+// -----------------------------
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Backend running on http://localhost:${PORT}`);

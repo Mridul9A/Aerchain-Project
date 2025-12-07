@@ -1,29 +1,29 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import Layout from "./components/Layout";
-import RfpCreatePage from "./pages/RfpCreatePage";
-import RfpListPage from "./pages/RfpListPage";
+import Dashboard from "./pages/Dashboard";
 import VendorsPage from "./pages/VendorsPage";
+import CreateRfpPage from "./pages/RfpCreatePage";
+import SendRfpPage from "./pages/SendRfpPage";
 
-type Page = "create" | "rfps" | "vendors";
+function App() {
+  const [page, setPage] = useState("dashboard");
+  const [selectedRfpId, setSelectedRfpId] = useState<number | null>(null);
 
-const App: React.FC = () => {
-  const [page, setPage] = useState<Page>("create");
+  function renderPage() {
+    if (page === "dashboard") return <Dashboard />;
+    if (page === "vendors") return <VendorsPage />;
+    if (page === "create") return <CreateRfpPage />;
+    if (page === "send" && selectedRfpId)
+      return <SendRfpPage rfpId={selectedRfpId} />;
+
+    return <Dashboard />;
+  }
 
   return (
-    <Layout current={page} onNavigate={(p) => setPage(p as Page)}>
-      {page === "create" && <RfpCreatePage />}
-      {page === "rfps" && (
-        <RfpListPage
-          onSelectRfp={(id) => {
-            // For Day 2, you can just log it.
-            // On Day 3, you can navigate to a detail view.
-            console.log("RFP selected:", id);
-          }}
-        />
-      )}
-      {page === "vendors" && <VendorsPage />}
+    <Layout current={page} onNavigate={setPage}>
+      {renderPage()}
     </Layout>
   );
-};
+}
 
 export default App;
